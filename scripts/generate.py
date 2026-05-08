@@ -1,6 +1,7 @@
 import json
 import datetime
 import requests
+import re
 import os
 import sys
 
@@ -45,22 +46,62 @@ def build_prompt(done):
         .replace("{USED_LANGUAGES}", used_langs)
         .replace("{TOPIC_OVERRIDE}", TOPIC_OVERRIDE))
 
-def parse_response(raw):
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1]
-    if raw.endswith("```"):
-        raw = raw.rsplit("```", 1)[0]
-    return json.loads(raw.strip())
+def extract_json(raw):
+    """Robustly extract JSON from messy model output."""
+
+    # 1. strip markdown fences
+    raw = re.sub(r"```(?:json)?", "", raw).strip()
+
+    # 2. try parsing as-is first
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # 3. find the first { ... } block in the text
+    match = re.search(r"\{[\s\S]*\}", raw)
+    if match:
+        candidate = match.group(0)
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+        # 4. fix trailing commas  e.g.  "key": "val",  }
+        candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+        # 5. fix single quotes used instead of double quotes
+        candidate = candidate.replace("'", '"')
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+    print("❌ Could not extract valid JSON from model response.")
+    print("── Raw response (first 800 chars) ──")
+    print(raw[:800])
+    sys.exit(1)
 
 def call_ollama(prompt):
+    # Wrap prompt to force JSON-only output
+    forced_prompt = (
+        "You must respond with ONLY a valid JSON object. "
+        "No explanation, no markdown, no extra text — just the raw JSON.\n\n"
+        + prompt
+    )
+
     print(f"🤖 Calling Ollama ({MODEL})...")
     payload = {
         "model":  MODEL,
-        "prompt": prompt,
+        "prompt": forced_prompt,
         "stream": False,
+        "format": "json",          # <-- forces Ollama to output JSON mode
         "options": {
-            "temperature": 0.9,
+            "temperature": 0.7,
             "num_predict": 1500
         }
     }
@@ -72,7 +113,8 @@ def call_ollama(prompt):
 
     raw = res.json()["response"]
     print("✅ Ollama responded")
-    return parse_response(raw)
+    print(f"── Preview (first 200 chars): {raw[:200]}")
+    return extract_json(raw)
 
 if __name__ == "__main__":
     os.makedirs("output", exist_ok=True)
