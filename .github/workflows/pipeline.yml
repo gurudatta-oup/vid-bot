@@ -48,7 +48,7 @@ jobs:
           python-version: "3.11"
 
       - name: 📦 Install dependencies
-        run: pip install -r requirements/generate.txt
+        run: pip install requests==2.31.0 google-generativeai==0.8.3
 
       - name: 🤖 Generate script via Gemini
         env:
@@ -95,7 +95,7 @@ jobs:
           python-version: "3.11"
 
       - name: 📦 Install dependencies
-        run: pip install -r requirements/audio.txt
+        run: pip install gTTS==2.5.1 requests==2.31.0
 
       - name: 🎙️ Generate voiceover
         run: |
@@ -139,7 +139,7 @@ jobs:
           sudo sed -i 's/<policy domain="path" rights="none" pattern="@\*"\/>/<policy domain="path" rights="read|write" pattern="@*"\/>/' /etc/ImageMagick-6/policy.xml || true
 
       - name: 📦 Install Python dependencies
-        run: pip install -r requirements/video.txt
+        run: pip install requests==2.31.0
 
       - name: 🎬 Assemble video
         env:
