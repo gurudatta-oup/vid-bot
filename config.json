@@ -1,0 +1,27 @@
+{
+  "video": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "duration_seconds": 60,
+    "format": "mp4"
+  },
+  "captions": {
+    "font_size": 72,
+    "font_color": "white",
+    "stroke_color": "black",
+    "stroke_width": 3,
+    "position": "center",
+    "words_per_caption": 4
+  },
+  "audio": {
+    "voice_lang": "en",
+    "voice_tld": "com",
+    "voice_speed": false
+  },
+  "pexels": {
+    "per_page": 5,
+    "orientation": "portrait",
+    "size": "medium"
+  }
+}

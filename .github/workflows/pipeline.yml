@@ -1,0 +1,230 @@
+name: 🎬 Video Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic_override:
+        description: "Optional: force a specific topic (leave blank for AI to choose)"
+        required: false
+        default: ""
+
+jobs:
+
+  # ─────────────────────────────────────────
+  # JOB 1 — SCRIPTING (VM 1)
+  # ─────────────────────────────────────────
+  scripting:
+    name: 📝 Generate Script
+    runs-on: ubuntu-latest
+    outputs:
+      title: ${{ steps.extract.outputs.title }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Download previous done.json if it exists
+      - name: 📥 Download done.json from previous run
+        uses: dawidd6/action-download-artifact@v3
+        continue-on-error: true
+        with:
+          name: done-json
+          path: ./
+          if_no_artifact_found: ignore
+
+      # Create empty done.json if first run
+      - name: 🆕 Init done.json if missing
+        run: |
+          if [ ! -f done.json ]; then
+            echo '{"videos":[],"used_languages":[],"used_topics":[],"last_updated":""}' > done.json
+            echo "Created fresh done.json"
+          else
+            echo "Loaded existing done.json"
+            cat done.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'History: {len(d[\"videos\"])} videos made')"
+          fi
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install dependencies
+        run: pip install -r requirements/generate.txt
+
+      - name: 🤖 Generate script via Gemini
+        env:
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          TOPIC_OVERRIDE: ${{ github.event.inputs.topic_override }}
+        run: |
+          mkdir -p output
+          python3 scripts/generate.py
+
+      - name: 🔍 Extract title for summary
+        id: extract
+        run: |
+          TITLE=$(python3 -c "import json; print(json.load(open('output/script.json'))['title'])")
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+          echo "✅ Script: $TITLE"
+
+      - name: 📤 Upload script + done.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: script
+          path: |
+            output/script.json
+            done.json
+
+  # ─────────────────────────────────────────
+  # JOB 2 — AUDIO (VM 2)
+  # ─────────────────────────────────────────
+  audio:
+    name: 🎙️ Generate Audio
+    runs-on: ubuntu-latest
+    needs: scripting
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: script
+          path: ./
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install dependencies
+        run: pip install -r requirements/audio.txt
+
+      - name: 🎙️ Generate voiceover
+        run: |
+          mkdir -p output
+          mv output/script.json output/ 2>/dev/null || mv script.json output/ 2>/dev/null || true
+          python3 scripts/audio.py
+
+      - name: 📤 Upload audio
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio
+          path: output/
+
+  # ─────────────────────────────────────────
+  # JOB 3 — VIDEO (VM 3)
+  # ─────────────────────────────────────────
+  video:
+    name: 🎬 Assemble Video
+    runs-on: ubuntu-latest
+    needs: audio
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: audio
+          path: output/
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg imagemagick
+          # Fix ImageMagick policy for text rendering
+          sudo sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/' /etc/ImageMagick-6/policy.xml || true
+          sudo sed -i 's/<policy domain="path" rights="none" pattern="@\*"\/>/<policy domain="path" rights="read|write" pattern="@*"\/>/' /etc/ImageMagick-6/policy.xml || true
+
+      - name: 📦 Install Python dependencies
+        run: pip install -r requirements/video.txt
+
+      - name: 🎬 Assemble video
+        env:
+          PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
+        run: python3 scripts/video.py
+
+      - name: 📤 Upload final video
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-video
+          path: output/reel.mp4
+          retention-days: 90
+
+  # ─────────────────────────────────────────
+  # JOB 4 — FINALIZE (VM 4)
+  # ─────────────────────────────────────────
+  finalize:
+    name: ✅ Save Artifacts
+    runs-on: ubuntu-latest
+    needs: video
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: script
+          path: ./
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: final-video
+          path: ./
+
+      # Update done.json with completion status
+      - name: ✅ Mark video as done
+        run: |
+          python3 - <<'EOF'
+          import json, datetime, os
+
+          with open("done.json", "r") as f:
+              done = json.load(f)
+
+          script_path = "output/script.json" if os.path.exists("output/script.json") else "script.json"
+          with open(script_path, "r") as f:
+              script = json.load(f)
+
+          done["videos"][-1]["status"] = "completed"
+          done["videos"][-1]["completed_at"] = datetime.datetime.utcnow().isoformat()
+          done["last_updated"] = str(datetime.date.today())
+
+          with open("done.json", "w") as f:
+              json.dump(done, f, indent=2)
+
+          print(f"✅ Marked complete: {script['title']}")
+          print(f"📊 Total videos made: {len(done['videos'])}")
+          EOF
+
+      # Save done.json as persistent artifact (downloaded next run)
+      - name: 💾 Save done.json artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: done-json
+          path: done.json
+          retention-days: 90
+
+      # Save final bundle
+      - name: 📦 Save final bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-bundle-${{ github.run_number }}
+          path: |
+            reel.mp4
+            done.json
+          retention-days: 90
+
+      - name: 🎉 Summary
+        run: |
+          python3 - <<'EOF'
+          import json, os
+          with open("done.json") as f:
+              done = json.load(f)
+          latest = done["videos"][-1]
+          print(f"")
+          print(f"🎬 Video Generated Successfully!")
+          print(f"📌 Title    : {latest['title']}")
+          print(f"💻 Language : {latest['language']}")
+          print(f"📅 Date     : {latest['date']}")
+          print(f"📊 Total    : {len(done['videos'])} videos made so far")
+          EOF
