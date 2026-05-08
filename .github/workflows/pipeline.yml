@@ -9,7 +9,6 @@ on:
         default: ""
 
 jobs:
-
   # ─────────────────────────────────────────
   # JOB 1 — SCRIPTING (VM 1)
   # ─────────────────────────────────────────
@@ -22,7 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Download previous done.json if it exists
       - name: 📥 Download done.json from previous run
         uses: dawidd6/action-download-artifact@v3
         continue-on-error: true
@@ -31,16 +29,29 @@ jobs:
           path: ./
           if_no_artifact_found: ignore
 
-      # Create empty done.json if first run
       - name: 🆕 Init done.json if missing
         run: |
           if [ ! -f done.json ]; then
             echo '{"videos":[],"used_languages":[],"used_topics":[],"last_updated":""}' > done.json
-            echo "Created fresh done.json"
-          else
-            echo "Loaded existing done.json"
-            cat done.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'History: {len(d[\"videos\"])} videos made')"
           fi
+
+      # Install Ollama + pull model
+      - name: 🦙 Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: 🚀 Start Ollama server
+        run: ollama serve &
+
+      - name: ⏳ Wait for Ollama to be ready
+        run: |
+          for i in {1..15}; do
+            curl -s http://localhost:11434/api/tags && break
+            echo "Waiting... ($i)"
+            sleep 3
+          done
+
+      - name: 📦 Pull model (phi3:mini — 2.3GB, fast on CPU)
+        run: ollama pull phi3:mini
 
       - name: 🐍 Set up Python
         uses: actions/setup-python@v5
@@ -48,17 +59,14 @@ jobs:
           python-version: "3.11"
 
       - name: 📦 Install dependencies
-        run: pip install requests==2.31.0 google-generativeai==0.8.3
+        run: pip install requests==2.31.0
 
-      - name: 🤖 Generate script via Gemini
-        env:
-          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
-          TOPIC_OVERRIDE: ${{ github.event.inputs.topic_override }}
+      - name: 🤖 Generate script via Ollama
         run: |
           mkdir -p output
           python3 scripts/generate.py
 
-      - name: 🔍 Extract title for summary
+      - name: 🔍 Extract title
         id: extract
         run: |
           TITLE=$(python3 -c "import json; print(json.load(open('output/script.json'))['title'])")
@@ -72,7 +80,6 @@ jobs:
           path: |
             output/script.json
             done.json
-
   # ─────────────────────────────────────────
   # JOB 2 — AUDIO (VM 2)
   # ─────────────────────────────────────────

@@ -3,21 +3,13 @@ import datetime
 import requests
 import os
 import sys
-import time
 
-GEMINI_KEY     = os.environ["GEMINI_KEY"]
 TOPIC_OVERRIDE = os.environ.get("TOPIC_OVERRIDE", "")
 DONE_FILE      = "done.json"
 PROMPT_FILE    = "prompt.txt"
 OUTPUT_FILE    = "output/script.json"
-
-# Try models in order — most free-tier friendly first
-MODELS = [
-    "gemini-2.0-flash-lite",  # highest free limits
-    "gemini-1.5-flash-8b",    # very generous free tier
-    "gemini-1.5-flash",       # solid fallback
-    "gemini-2.0-flash",       # lower free quota
-]
+OLLAMA_URL     = "http://localhost:11434/api/generate"
+MODEL          = "phi3:mini"
 
 def load_done():
     try:
@@ -61,48 +53,33 @@ def parse_response(raw):
         raw = raw.rsplit("```", 1)[0]
     return json.loads(raw.strip())
 
-def call_gemini(prompt):
+def call_ollama(prompt):
+    print(f"🤖 Calling Ollama ({MODEL})...")
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.9, "maxOutputTokens": 1500}
+        "model":  MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": 0.9,
+            "num_predict": 1500
+        }
     }
+    res = requests.post(OLLAMA_URL, json=payload, timeout=300)
 
-    for model in MODELS:
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta"
-            f"/models/{model}:generateContent?key={GEMINI_KEY}"
-        )
-        print(f"🤖 Trying: {model}")
+    if res.status_code != 200:
+        print(f"❌ Ollama error {res.status_code}: {res.text}")
+        sys.exit(1)
 
-        for attempt in range(3):
-            res = requests.post(url, json=payload, timeout=60)
-
-            if res.status_code == 200:
-                raw = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-                print(f"✅ Success with {model}")
-                return parse_response(raw)
-
-            elif res.status_code == 429:
-                wait = 15 * (attempt + 1)
-                print(f"  ⚠️  429 quota (attempt {attempt+1}/3) — waiting {wait}s...")
-                time.sleep(wait)
-
-            else:
-                print(f"  ❌ Error {res.status_code} — trying next model")
-                break
-
-        print(f"  ⏭️  Next model...")
-
-    print("❌ All models quota exhausted.")
-    print("💡 Get a new key: https://aistudio.google.com/app/apikey")
-    sys.exit(1)
+    raw = res.json()["response"]
+    print("✅ Ollama responded")
+    return parse_response(raw)
 
 if __name__ == "__main__":
     os.makedirs("output", exist_ok=True)
 
     done   = load_done()
     prompt = build_prompt(done)
-    script = call_gemini(prompt)
+    script = call_ollama(prompt)
 
     required = ["date", "language", "topic", "title", "script",
                 "search_keywords", "tags", "description", "thumbnail_text"]
