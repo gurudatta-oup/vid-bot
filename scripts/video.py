@@ -5,7 +5,6 @@ import sys
 import math
 import subprocess
 import requests
-import urllib.request
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 SCRIPT_FILE  = "output/script.json"
@@ -70,7 +69,21 @@ def fetch_pexels_clips(keywords, total_duration):
 
         clip_path = os.path.join(CLIPS_DIR, f"clip_{idx}.mp4")
         print(f"  ⬇️  Downloading clip {idx+1}...")
-        urllib.request.urlretrieve(chosen["link"], clip_path)
+        dl = requests.get(
+            chosen["link"],
+            headers={
+                "Authorization": PEXELS_KEY,
+                "User-Agent": "Mozilla/5.0"
+            },
+            timeout=60,
+            stream=True
+        )
+        if dl.status_code != 200:
+            print(f"  ⚠️  Download failed {dl.status_code} — skipping")
+            continue
+        with open(clip_path, "wb") as f:
+            for chunk in dl.iter_content(chunk_size=8192):
+                f.write(chunk)
         downloaded.append(clip_path)
         print(f"  ✅ Saved: {clip_path}")
 
